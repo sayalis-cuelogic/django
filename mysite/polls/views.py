@@ -1,32 +1,31 @@
 from django.shortcuts import get_object_or_404, render
-from polls.models import Question 
-from django.http import HttpResponseRedirect, HttpResponse, Http404
+from django.http import HttpResponseRedirect
 from django.core.urlresolvers import reverse
+from django.views import generic
+from django.utils import timezone
 
-# Create your views here.
+from .models import Choice, Question
 
-#def index(request):
-#	return HttpResponse("Hey hii m polls app")
 
-def index(request):
-	#assert False, Question.objects.all()
-	latest_question_list = Question.objects.order_by('-pub_date')
-	#output = ','.join([p.question_txt for p in latest_question_list])
-	#template = loader.get_template('polls/index.html')
-	context = {'latest_question_list' : latest_question_list}				
-	#return HttpResponse(template.render(context))
-	return render(request, 'polls/index.html', context)
+class IndexView(generic.ListView):
+	template_name = 'polls/index.html'
+	context_object_name = 'latest_question_list'
 
-def detail(request, question_id):
-	try:
-		question = Question.objects.get(pk = question_id)
-	except Question.DoesNotExist:
-		raise Http404("Question does not exist")
-	return render(request,'polls/index.html',{'question' : question})
+	def get_queryset(self):
+		return Question.objects.filter(pub_date__lte = timezone.now()).order_by('-pub_date')[:5]
+		
 
-def results(request, question_id):
-	question = get_object_or_404(Question, pk=question_id)
-	return render(request, 'polls/results.html', {'question': question})
+class DetailView(generic.DetailView):
+	model = Question
+	template_name = 'polls/detail.html'
+
+	def get_queryset(self):      
+        return Question.objects.filter(pub_date__lte=timezone.now())
+
+
+class ResultsView(generic.DetailView):
+	model = Question
+	template_name = 'polls/results.html'
 
 def vote(request, question_id):
 	p = get_object_or_404(Question, pk=question_id)
@@ -41,9 +40,56 @@ def vote(request, question_id):
 	else:
 		selected_choice.votes += 1
 		selected_choice.save()
-		# Always return an HttpResponseRedirect after successfully dealing
-		# with POST data. This prevents data from being posted twice if a
-		# user hits the Back button.
+
 		return HttpResponseRedirect(reverse('polls:results', args=(p.id,)))
 	
+def create_question(question_text, days):
+   
+	time = timezone.now() + datetime.timedelta(days = days)
+	return Question.objects.create(question_text = question_text, pub_date = time)
 
+class QuestionViewTests(TestCase):
+    def test_index_view_with_no_questions(self):
+       
+        response = self.client.get(reverse('polls:index'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "No polls are available.")
+        self.assertQuerysetEqual(response.context['latest_question_list'], [])
+
+	def test_index_view_with_a_past_question(self):
+        
+        create_question(question_text = "Past question.", days = -30)
+        response = self.client.get(reverse('polls:index'))
+        self.assertQuerysetEqual(response.context['latest_question_list'],['<Question: Past question.>'])
+
+    def test_index_view_with_a_future_question(self):
+       
+        create_question(question_text="Future question.", days=30)
+        response = self.client.get(reverse('polls:index'))
+        self.assertContains(response, "No polls are available.",status_code=200)
+        self.assertQuerysetEqual(response.context['latest_question_list'], [])
+
+    def test_index_view_with_future_question_and_past_question(self):
+       
+        create_question(question_text="Past question.", days=-30)
+        create_question(question_text="Future question.", days=30)
+        response = self.client.get(reverse('polls:index'))
+        self.assertQuerysetEqual(response.context['latest_question_list'],['<Question: Past question.>'])
+
+    def test_index_view_with_two_past_questions(self):
+       
+        create_question(question_text="Past question 1.", days=-30)
+        create_question(question_text="Past question 2.", days=-5)
+        response = self.client.get(reverse('polls:index'))
+        self.assertQuerysetEqual(response.context['latest_question_list'],['<Question: Past question 2.>', '<Question: Past question 1.>'])
+
+class QuestionIndexDetailTests(TestCase):
+    def test_detail_view_with_a_future_question(self):
+        future_question = create_question(question_text='Future question.',days=5)
+        response = self.client.get(reverse('polls:detail',args=(future_question.id,)))
+        self.assertEqual(response.status_code, 404)
+
+    def test_detail_view_with_a_past_question(self):
+       	past_question = create_question(question_text='Past Question.',days=-5)
+        response = self.client.get(reverse('polls:detail',args=(past_question.id,)))
+        self.assertContains(response, past_question.question_text,status_code=200)
